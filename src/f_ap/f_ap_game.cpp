@@ -15,9 +15,12 @@
 #include "d/d_model.h"
 #include "d/d_tresure.h"
 #include "dusk/achievements.h"
+#include "dusk/crash_handler.h"
 #include "dusk/frame_interpolation.h"
 #include "dusk/livesplit.h"
 #include "dusk/logging.h"
+#include "dusk/net.h"
+#include "d/actor/d_a_dusk_puppet.h"
 #include "f_op/f_op_camera_mng.h"
 #include "f_op/f_op_draw_tag.h"
 #include "f_op/f_op_overlap_mng.h"
@@ -743,6 +746,7 @@ static void fapGm_AfterRecord() {
 BOOL isRecording = false;
 
 static void duskExecute() {
+    dusk::crash_handler::heartbeat();  // hang-watchdog liveness pulse (once/frame)
     dusk::input::handleGamepadColor();
     updateAutoSave();
 
@@ -841,6 +845,8 @@ void fapGm_Execute() {
     cCt_Counter(0);
 #ifdef TARGET_PC
     dusk::speedrun::onGameFrame();
+    dusk::net::onGameFrame();
+    daDuskPuppet_updateAll();
     dusk::AchievementSystem::get().tick();
 #endif
 }

@@ -1039,6 +1039,7 @@ set(REL_FILES
         src/d/actor/d_a_obj_Lv5Key.cpp
         src/d/actor/d_a_obj_Turara.cpp
         src/d/actor/d_a_obj_TvCdlst.cpp
+        src/d/actor/d_a_dusk_puppet.cpp
         src/d/actor/d_a_obj_Y_taihou.cpp
         src/d/actor/d_a_obj_amiShutter.cpp
         src/d/actor/d_a_obj_ari.cpp
@@ -1460,6 +1461,7 @@ set(DUSK_FILES
         src/dusk/imgui/ImGuiMenuTools.cpp
         src/dusk/imgui/ImGuiMenuTools.hpp
         src/dusk/imgui/ImGuiActorSpawner.cpp
+        src/dusk/imgui/ImGuiMultiplayer.cpp
         src/dusk/imgui/ImGuiProcessOverlay.cpp
         src/dusk/imgui/ImGuiCameraOverlay.cpp
         src/dusk/imgui/ImGuiHeapOverlay.cpp
@@ -1522,6 +1524,7 @@ set(DUSK_FILES
         src/dusk/achievements.cpp
         src/dusk/iso_validate.cpp
         src/dusk/livesplit.cpp
+        src/dusk/net.cpp
         src/dusk/offset_ptr.cpp
         src/dusk/OSContext.cpp
         src/dusk/OSReport.cpp

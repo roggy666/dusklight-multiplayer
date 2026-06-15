@@ -1599,6 +1599,7 @@ extern actor_process_profile_definition DUSK_CONST g_profile_TALK;
 extern actor_process_profile_definition DUSK_CONST g_profile_TBOX_SW;
 extern actor_process_profile_definition DUSK_CONST g_profile_TITLE;
 extern actor_process_profile_definition DUSK_CONST g_profile_WarpBug;
+extern actor_process_profile_definition DUSK_CONST g_profile_DUSK_PUPPET;
 #endif
 
 extern process_profile_definition DUSK_CONST* DUSK_CONST g_fpcPfLst_ProfileList[];

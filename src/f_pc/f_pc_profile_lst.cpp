@@ -800,6 +800,7 @@ process_profile_definition* g_fpcPfLst_ProfileList[] = {
     &g_profile_TIMER,
     &g_profile_METER2,
     &g_profile_GAMEOVER,
+    &g_profile_DUSK_PUPPET,
     NULL,
 };
 extern "C" void ModuleProlog() {
@@ -1604,6 +1605,7 @@ process_profile_definition DUSK_CONST* DUSK_CONST g_fpcPfLst_ProfileList[] = {
     &g_profile_TIMER.base.base,
     &g_profile_METER2.base.base,
     &g_profile_GAMEOVER.base.base,
+    &g_profile_DUSK_PUPPET.base.base,
     NULL,
 };
 #endif

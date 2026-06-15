@@ -3478,6 +3478,22 @@ public:
     bool checkUpperAnime(u16 i_resIdx) const { return mUpperAnmHeap[UPPER_2].getIdx() == i_resIdx; }
     bool checkUnderAnime(u16 i_resIdx) const { return mUnderAnmHeap[UNDER_2].getIdx() == i_resIdx; }
 
+    // dusklight: current body animation index synced to remote puppets so they
+    // mirror the local player. Prefer the UNDER_0 base (full-body locomotion:
+    // run/walk/roll/idle has both legs AND arms) over the UNDER_2 overlay — the
+    // overlay holds partial/idle-arm poses during running, which made puppets run
+    // with idle arms. Fall back to the overlay only when no base anim is set.
+    u16 getDuskBodyAnmIdx() const {
+        u16 base = mUnderAnmHeap[UNDER_0].getIdx();
+        return base != 0xFFFF ? base : mUnderAnmHeap[UNDER_2].getIdx();
+    }
+    // dusklight: current UPPER-body animation (arms/torso layer). Synced separately
+    // so puppets can blend running legs (under) with arm motion (upper) per joint.
+    u16 getDuskUpperAnmIdx() const {
+        u16 up = mUpperAnmHeap[UPPER_2].getIdx();
+        return up != 0xFFFF ? up : mUpperAnmHeap[UPPER_0].getIdx();
+    }
+
     bool checkNoSetUpperAnime() const { return mUpperAnmHeap[UPPER_2].checkNoSetIdx(); }
     bool checkSwimMoveHandAnime() const { return checkUpperAnime(dRes_ID_ALANM_BCK_SWIMINGB_e); }
     bool checkZoraSwimDamageAnime() const { return checkUpperAnime(dRes_ID_ALANM_BCK_DAMSW_e); }

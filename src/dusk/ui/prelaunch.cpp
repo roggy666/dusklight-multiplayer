@@ -5,6 +5,7 @@
 #include "dusk/file_select.hpp"
 #include "dusk/iso_validate.hpp"
 #include "dusk/main.h"
+#include "dusk/net.h"
 #include "dusk/settings.h"
 #include "dusk/update_check.hpp"
 #include "modal.hpp"
@@ -719,16 +720,48 @@ Prelaunch::Prelaunch() : Document(kDocumentSource), mRoot(mDocument->GetElementB
         });
         apply_intro_animation(mMenuButtons.back()->root(), "delay-1");
 
+        // Multiplayer: same launch as Play, but auto-connect to the stored relay
+        // server once in-world. Server/name are edited via the in-game
+        // Multiplayer window (defaults 127.0.0.1:10020).
+        mMenuButtons.push_back(std::make_unique<Button>(menuList, "Multiplayer"));
+        mMenuButtons.back()->on_pressed([this] {
+            if (prelaunch_state().activeDiscPath.empty()) {
+                open_iso_picker();
+                return;
+            }
+
+            dusk::net::requestAutoConnect();
+
+            mDoAud_seStartMenu(kSoundPlay);
+            show_menu_notification();
+
+            if (getSettings().audio.menuSounds) {
+                JAISoundHandle* handle = g_mEnvSeMgr.field_0x144.getHandle();
+                if (*handle) {
+                    (*handle)->stop(60);
+                    (*handle)->releaseHandle();
+                }
+            }
+
+            if (g_mDoMemCd_control.mCardCommand == mDoMemCd_Ctrl_c::Command_e::COMM_NONE_e) {
+                mDoMemCd_ThdInit();
+            }
+
+            IsGameLaunched = true;
+            hide(true);
+        });
+        apply_intro_animation(mMenuButtons.back()->root(), "delay-2");
+
         mMenuButtons.push_back(std::make_unique<Button>(menuList, "Settings"));
         mMenuButtons.back()->on_pressed([this] {
             mRestartSuppressed = false;
             push(std::make_unique<SettingsWindow>(true));
         });
-        apply_intro_animation(mMenuButtons.back()->root(), "delay-2");
+        apply_intro_animation(mMenuButtons.back()->root(), "delay-3");
 
         mMenuButtons.push_back(std::make_unique<Button>(menuList, "Quit"));
         mMenuButtons.back()->on_pressed([] { IsRunning = false; });
-        apply_intro_animation(mMenuButtons.back()->root(), "delay-3");
+        apply_intro_animation(mMenuButtons.back()->root(), "delay-4");
     }
 
     mDiscStatus = mDocument->GetElementById("disc-status");

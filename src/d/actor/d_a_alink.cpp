@@ -2448,6 +2448,14 @@ static int daAlink_modelCallBack(J3DJoint* i_joint, int param_1) {
     int jntNo = joint->getJntNo();
     daAlink_c* i_this = (daAlink_c*)j3dSys.getModel()->getUserArea();
 
+    // dusklight: the body model data is shared with remote-player puppets
+    // (d_a_dusk_puppet), which never set a user area. Skip Link's joint logic
+    // for those so calc() just produces a plain skeletal pose instead of
+    // dereferencing a null actor.
+    if (i_this == NULL) {
+        return 1;
+    }
+
     if (param_1 == 0) {
         i_this->modelCallBack(jntNo);
     } else if (param_1 == 1 && i_this->checkResetRootMtx(jntNo)) {
@@ -2507,6 +2515,10 @@ static int daAlink_headModelCallBack(J3DJoint* i_joint, int param_1) {
     int joint_no = joint->getJntNo();
     daAlink_c* i_this = (daAlink_c*)j3dSys.getModel()->getUserArea();
 
+    if (i_this == NULL) {  // dusklight: shared model drawn by a remote puppet
+        return 1;
+    }
+
     if (param_1 == 0) {
         i_this->headModelCallBack(joint_no);
     }
@@ -2530,6 +2542,10 @@ static int daAlink_wolfModelCallBack(J3DJoint* i_joint, int param_1) {
     J3DJoint* joint = i_joint;
     int joint_no = joint->getJntNo();
     daAlink_c* i_this = (daAlink_c*)j3dSys.getModel()->getUserArea();
+
+    if (i_this == NULL) {  // dusklight: shared model drawn by a remote puppet
+        return 1;
+    }
 
     if (param_1 == 0) {
         i_this->wolfModelCallBack(joint_no);

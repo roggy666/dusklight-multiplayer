@@ -105,6 +105,7 @@ namespace dusk {
             ImGui::MenuItem("Bloom", nullptr, &m_showBloomWindow);
             ImGui::MenuItem("Stub Log", nullptr, &m_showStubLog);
             ImGui::MenuItem("Actor Spawner", nullptr, &m_showActorSpawner);
+            ImGui::MenuItem("Multiplayer", nullptr, &m_showMultiplayer);
 
             if (!dusk::IsGameLaunched) {
                 ImGui::EndDisabled();

@@ -369,6 +369,14 @@ namespace dusk {
             m_menuTools.ShowSaveEditor();
             m_menuTools.ShowStateShare();
             m_menuTools.ShowActorSpawner();
+            m_menuTools.ShowMultiplayerWindow();
+        }
+
+        // World-anchored multiplayer nameplates: drawn every frame regardless
+        // of menu/speedrun state so other players stay visible during normal
+        // gameplay (no-op unless connected).
+        if (dusk::IsGameLaunched) {
+            m_menuTools.ShowMultiplayerNameplates();
         }
 
     }
