@@ -184,6 +184,19 @@ void daAlink_c::initForceRideHorse() {
     mZ2Link.setRiding(true);
 }
 
+// dusklight: co-op passenger board. The shared Epona is slaved to a remote driver,
+// so a non-driver can't mount it normally. Force the local Link straight into the
+// proper riding-wait state on it (real seated pose + the engine keeps Link on the
+// saddle each frame). The slaved horse ignores this rider's steering input, so the
+// passenger just rides along; pressing the get-off input dismounts as usual.
+void daAlink_c::duskBoardHorsePassenger() {
+    if (dComIfGp_getHorseActor() == NULL) {
+        return;
+    }
+    initForceRideHorse();
+    procHorseWaitInit();
+}
+
 void daAlink_c::rideGetOff() {
     if (checkHorseRide()) {
         daHorse_c* horse_p = dComIfGp_getHorseActor();
@@ -418,6 +431,17 @@ int daAlink_c::setSyncHorsePos() {
         }
 
         shape_angle = horse_p->shape_angle;
+    }
+
+    // dusklight co-op: a PASSENGER (riding while a remote drives the shared horse)
+    // sits at the rear seat instead of the front saddle the engine just set, so the
+    // driver and passenger don't overlap. Keep the height/angle, shift X/Z back.
+    if (dusk::net::hasRemoteHorseOwner()) {
+        static const Vec l_duskRearSeat = {-5.894f, 52.61f, 4.079f};
+        cXyz rear;
+        mDoMtx_multVec(horse_p->getRootMtx(), &l_duskRearSeat, &rear);
+        current.pos.x = rear.x;
+        current.pos.z = rear.z;
     }
 
     current.angle.y = shape_angle.y;

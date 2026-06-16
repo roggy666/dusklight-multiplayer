@@ -14,11 +14,12 @@ payload[0] = message type:
     0 Hello    C->S : u8 version, u8 nameLen, name[nameLen]
     1 Welcome  S->C : u8 id
     2 State    C->S : u32 sceneHash, s8 room, f32 x, f32 y, f32 z, s16 angleY, u16 anim
-    3 Snapshot S->C : u8 count, count * {
-                          u8 id, u8 nameLen, name[nameLen],
-                          u32 sceneHash, s8 room,
-                          f32 x, f32 y, f32 z, s16 angleY, u16 anim }
-All integers little-endian.
+    3 Snapshot S->C : u8 count, count * { u8 id, u8 nameLen, name, <state> }
+    4 ProgressDelta C->S : u8 full, u32 baseVersion, s32 rupeeField,
+                           u8 spanCount, spanCount*{u16 off,u16 len,bytes}
+    5 ProgressState S->C : u32 version, u8 region[SAVE_REGION_SIZE]
+    6 Warp          S->C : /load cross-scene warp (Phase 3)
+All integers little-endian. <state> = _STATE_FMT.
 
 Usage:
     python relay_server.py [--host 0.0.0.0] [--port 10020] [--tick 30]
@@ -31,7 +32,7 @@ import struct
 import sys
 import time
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 6
 MAX_PLAYERS = 16
 MAX_NAME = 15
 
@@ -39,11 +40,22 @@ MSG_HELLO = 0
 MSG_WELCOME = 1
 MSG_STATE = 2
 MSG_SNAPSHOT = 3
+MSG_PROGRESS_DELTA = 4   # C->S: shared inventory/world delta (or full seed)
+MSG_PROGRESS_STATE = 5   # S->C: u32 version + full canonical save region
+MSG_WARP = 6             # S->C: /load cross-scene warp (Phase 3)
 
 # State payload after the type byte: u32 scene, s8 room, 3f, s16 angle, u16 anim
-# (legs), u16 animUpper (arms), u8 costume, u8 flags, 24s eventName (cutscene)
-_STATE_FMT = "<IbfffhHHBB24s"
+# (legs), u16 animUpper (arms), u8 costume, u8 flags, 24s eventName (cutscene),
+# 8s stageName (real stage name for /save + warps), 3f horse pos, s16 horse angle,
+# u16 horse anim, u8 seat (shared-Epona co-op)
+_STATE_FMT = "<IbfffhHHBB24s8sfffhHB"
 _STATE_LEN = struct.calcsize(_STATE_FMT)
+
+# Shared progress: a whitelist of the live save block is mirrored here. The relay
+# is authoritative — it holds the canonical region and merges client deltas
+# (rupees additively, everything else per-byte) so concurrent pickups all count.
+SAVE_REGION_SIZE = 0x8F0   # mPlayer + mSave[32] + mSave2[64] + mEvent
+RUPEE_OFF = 0x04           # dSv_player_status_a_c::mRupee (big-endian u16)
 
 
 def frame(payload: bytes) -> bytes:
@@ -61,8 +73,9 @@ class Client:
         self.inbuf = bytearray()
         self.outbuf = bytearray()
         self.have_state = False
-        # (sceneHash, room, x, y, z, angleY, anim, animUpper, costume, flags, eventName)
-        self.state = (0, -1, 0.0, 0.0, 0.0, 0, 0, 0, 0, 0, b"")
+        # (sceneHash, room, x, y, z, angleY, anim, animUpper, costume, flags,
+        #  eventName, stageName, horseX, horseY, horseZ, horseAngleY, horseAnim, seat)
+        self.state = (0, -1, 0.0, 0.0, 0.0, 0, 0, 0, 0, 0, b"", b"", 0.0, 0.0, 0.0, 0, 0, 0)
 
     def queue(self, data: bytes):
         self.outbuf += data
@@ -74,6 +87,11 @@ class RelayServer:
         self.clients: dict[socket.socket, Client] = {}
         self.next_id = 1
         self.tick_dt = 1.0 / max(1.0, tick_hz)
+
+        # Canonical shared inventory/world progress (authoritative).
+        self.progress = bytearray(SAVE_REGION_SIZE)
+        self.progress_version = 0
+        self.progress_seeded = False
 
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -151,11 +169,80 @@ class RelayServer:
                     client.name = name
             client.queue(frame(bytes([MSG_WELCOME, client.id])))
             print(f"[relay] id {client.id} hello as '{client.name}'")
+            # A joining client adopts the shared world: hand it the canonical
+            # progress immediately (if we have one). Its own full snapshot will be
+            # ignored below since we're already seeded.
+            if self.progress_seeded:
+                client.queue(self.build_progress_state())
         elif msg == MSG_STATE:
             if len(body) >= _STATE_LEN:
                 client.state = struct.unpack_from(_STATE_FMT, body, 0)
                 client.have_state = True
+        elif msg == MSG_PROGRESS_DELTA:
+            self.handle_progress(client, body)
         # unknown messages ignored
+
+    # --- shared progress ---
+    def build_progress_state(self) -> bytes:
+        return frame(bytes([MSG_PROGRESS_STATE]) +
+                     struct.pack("<I", self.progress_version) + bytes(self.progress))
+
+    def broadcast_progress(self):
+        state = self.build_progress_state()
+        for c in self.clients.values():
+            c.queue(state)
+
+    @staticmethod
+    def _parse_spans(body: bytes, off: int, count: int):
+        spans = []
+        for _ in range(count):
+            if len(body) - off < 4:
+                break
+            (spoff, splen) = struct.unpack_from("<HH", body, off)
+            off += 4
+            if len(body) - off < splen:
+                break
+            spans.append((spoff, body[off:off + splen]))
+            off += splen
+        return spans
+
+    def handle_progress(self, client: Client, body: bytes):
+        # body: u8 full, u32 baseVersion, s32 rupeeField, u8 spanCount, spans...
+        if len(body) < 10:
+            return
+        full = body[0]
+        (_base_version,) = struct.unpack_from("<I", body, 1)
+        (rupee_field,) = struct.unpack_from("<i", body, 5)
+        span_count = body[9]
+        spans = self._parse_spans(body, 10, span_count)
+
+        if full and not self.progress_seeded:
+            # First/main player defines the world.
+            self.progress = bytearray(SAVE_REGION_SIZE)
+            self._apply_spans(spans)
+            self._set_rupee(max(0, min(0xFFFF, rupee_field)))   # absolute seed value
+            self.progress_seeded = True
+            self.progress_version = 1
+            print(f"[relay] progress seeded by id {client.id} (rupees={rupee_field})")
+            self.broadcast_progress()
+        elif full and self.progress_seeded:
+            # Already have a world; this joiner adopts ours (sent on hello). Ignore.
+            pass
+        elif not full and self.progress_seeded:
+            self._apply_spans(spans)
+            cur = (self.progress[RUPEE_OFF] << 8) | self.progress[RUPEE_OFF + 1]
+            self._set_rupee(max(0, min(0xFFFF, cur + rupee_field)))  # additive merge
+            self.progress_version += 1
+            self.broadcast_progress()
+
+    def _apply_spans(self, spans):
+        for off, data in spans:
+            if 0 <= off and off + len(data) <= SAVE_REGION_SIZE:
+                self.progress[off:off + len(data)] = data
+
+    def _set_rupee(self, value: int):
+        self.progress[RUPEE_OFF] = (value >> 8) & 0xFF
+        self.progress[RUPEE_OFF + 1] = value & 0xFF
 
     # --- outgoing snapshots ---
     def build_snapshot(self, exclude: Client) -> bytes:

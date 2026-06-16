@@ -269,6 +269,8 @@ public:
     f32 getMorfFrame() const { return m_morf_frame; }
     f32 getBlendRate() { return m_anmRatio[1].getRatio(); }
     u16 getAnmIdx(int i_idx) const { return m_anmIdx[i_idx]; }
+    // dusklight: true when this Epona is present/drawn (not parked far in NO_DRAW).
+    bool duskActive() const { return !checkStateFlg0(FLG0_NO_DRAW_WAIT); }
     int callHorse(const cXyz* param_0) { return (this->*m_callHorse)(param_0); }
 
     daHoZelda_c* getZeldaActor() { return (daHoZelda_c*)m_zeldaActorKeep.getActor(); }

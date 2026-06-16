@@ -23,6 +23,7 @@
 #if TARGET_PC
 #include "dusk/dusk.h"
 #include "dusk/frame_interpolation.h"
+#include "dusk/net.h"  // dusk::net::getRemoteHorse (co-op shared Epona slave)
 
 namespace {
 // FRAME INTERP NOTE: Sim tick control point snapshots for interpolation
@@ -4442,11 +4443,16 @@ int daHorse_c::execute() {
     m_zeldaActorKeep.setActor();
 
     if (checkStateFlg0(FLG0_NO_DRAW_WAIT)) {
-        if (checkStateFlg0(FLG0_CALL_HORSE)) {
+        // dusklight: a parked/far Epona sits in NO_DRAW_WAIT and returns early here,
+        // before our slave code below. When a REMOTE player is driving the shared
+        // horse, wake our Epona so it teleports to the driver (otherwise the horse
+        // only appears for whoever summoned it).
+        if (checkStateFlg0(FLG0_CALL_HORSE) ||
+            (this == dComIfGp_getHorseActor() && dusk::net::hasRemoteHorseOwner())) {
             offStateFlg0(FLG0_NO_DRAW_WAIT);
         } else {
             return 1;
-        } 
+        }
     }
 
     daAlink_c* player_p = daAlink_getAlinkActorClass();
@@ -4516,7 +4522,33 @@ int daHorse_c::execute() {
     }
 #endif
 
-    if (l_debugMode) {
+    // dusklight co-op: there is only ONE global Epona. When a remote player is
+    // mounted (driving the shared horse) and the local player is NOT riding, slave
+    // THIS Epona to the remote's synced transform instead of running its own AI, so
+    // both clients see the same horse in the same place. Reuses the debug-move path
+    // (direct pos set + setMatrix/calc/setBodyPart, no animePlay/AI).
+    float dusk_hx, dusk_hy, dusk_hz;
+    s16   dusk_hang;
+    u16   dusk_hanm = 0xFFFF;
+    // getRemoteHorse returns true only when a REMOTE is the driver (lowest mounted
+    // id); it returns false when we are the driver. So this also slaves the horse
+    // for a local PASSENGER (mounted but not the driver) -> the shared horse mirrors
+    // the driver and the passenger rides along.
+    const bool dusk_slaved = (this == dComIfGp_getHorseActor()) && player_p != NULL &&
+                             dusk::net::getRemoteHorse(&dusk_hx, &dusk_hy, &dusk_hz, &dusk_hang, &dusk_hanm);
+    if (dusk_slaved) {
+        current.pos.set(dusk_hx, dusk_hy, dusk_hz);
+        shape_angle.y = dusk_hang;
+        // Mirror the driver's animation: (re)bind when it changes, then advance its
+        // frames each tick. Skip demo-archive anims (0x8000) not in our Horse arc.
+        if (dusk_hanm != 0xFFFF && (dusk_hanm & 0x8000) == 0 && dusk_hanm != m_anmIdx[0]) {
+            setSingleAnime(dusk_hanm, 1.0f, 0.0f, -1, 5.0f, FALSE);
+        }
+        animePlay();
+        setMatrix();
+        m_model->calc();
+        setBodyPart();
+    } else if (l_debugMode) {
         f32 f31 = 50.0f;
         if (mDoCPd_c::getHoldLockR(PAD_1)) {
             f31 = 100.0f;

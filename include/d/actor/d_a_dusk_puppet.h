@@ -3,6 +3,7 @@
 
 #include "f_op/f_op_actor_mng.h"
 #include "d/d_com_inf_game.h"
+#include "JSystem/J3DGraphBase/J3DTransform.h"  // J3DTransformInfo (per-joint pose cache)
 
 class mDoExt_McaMorf;
 class J3DAnmTransform;
@@ -16,6 +17,8 @@ class J3DAnmTransform;
 
 class daDuskPuppet_c : public fopAc_ac_c {
 public:
+    enum { kMaxJoints = 64 };  // Link body has ~0x1B joints; mPose array is guarded
+
     int create();
     int CreateHeap();
     static int createHeapCallBack(fopAc_ac_c*);
@@ -37,14 +40,19 @@ private:
     u16             mCurUpperId;   // upper-body (arms) BCK id currently playing
     float           mUnderFrame;   // playback frame of the lower-body anim
     float           mUpperFrame;   // playback frame of the upper-body anim
-    // Crossfade state: when a layer's anim changes we keep the previous anim and
-    // blend prev->cur over a few frames (morph 0..1) so transitions aren't snappy.
-    J3DAnmTransform* mUnderPrev;
-    J3DAnmTransform* mUpperPrev;
-    float           mUnderPrevFrame;
-    float           mUpperPrevFrame;
-    float           mUnderMorph;   // 0 = fully prev, 1 = fully cur
-    float           mUpperMorph;
+    // Animation crossfade. When a layer's anim id changes we blend the persistent
+    // per-joint pose toward the NEW anim's live pose over kMorphFrames, mirroring
+    // the engine's incremental morf (mDoExt_McaMorf::calc): each frame nudges the
+    // stored pose a fraction of the remaining gap toward the moving target — NOT a
+    // frozen prev->cur lerp (that hand-rolled version lagged the arms). Rotation is
+    // shortest-arc s16. Lower (legs) and upper (arms) layers crossfade
+    // independently so e.g. drawing a sword doesn't restart the legs.
+    bool             mMorphReady;  // one full body calc done -> safe to crossfade
+    float            mUnderMorf;   // lower-layer morf progress 0..1 (1 = settled)
+    float            mUpperMorf;   // upper-layer morf progress 0..1
+    bool             mUnderMorfing;// lower layer mid-crossfade
+    bool             mUpperMorfing;// upper layer mid-crossfade
+    J3DTransformInfo mPose[kMaxJoints];  // persistent blended pose per body joint
 };
 
 // Spawn / update / despawn one puppet per remote player in the local scene.

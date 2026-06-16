@@ -2226,6 +2226,7 @@ public:
     void commonInitForceRideRein();
     int initForceRideBoar();
     void initForceRideHorse();
+    void duskBoardHorsePassenger();  // dusklight: co-op force-board the shared Epona
     void rideGetOff();
     BOOL checkHorseNotDamageReaction() const;
     BOOL checkHorseWaitLashAnime() const;

@@ -11,6 +11,7 @@
 
 #include "d/actor/d_a_dusk_puppet.h"
 #include "d/actor/d_a_player.h"        // daPy_getLinkPlayerActorClass()
+#include "d/actor/d_a_horse.h"         // daHorse_c::getRootMtx() (passenger seat)
 #include "d/d_com_inf_game.h"
 #include "d/d_event_manager.h"        // dEvent_manager_c::getRunEventName (cutscene sync)
 #include "d/d_kankyo.h"               // g_env_light
@@ -286,29 +287,87 @@ J3DAnmTransform* getAnimById(u16 resId) {
     return a;
 }
 
+// Crossfade tuning. A layer's anim switch blends over kMorphFrames render frames
+// (~0.13 s at 60 fps): long enough to kill the idle->run "arm teleport", short
+// enough not to feel like the arms lag the body.
+constexpr int kMorphFrames = 8;
+constexpr f32 kMorphStep   = 1.0f / (f32)kMorphFrames;
+
+// Advance one layer's morf progress and return the INCREMENTAL blend factor for
+// this frame: the fraction of the still-remaining gap to close now. With cur
+// ramping linearly 0->1, (cur-prev)/(1-prev) eases the stored pose onto the live
+// target and reaches it exactly when cur hits 1 (mirrors mDoExt_morf_c). Returns
+// 1.0 (snap) when the layer isn't crossfading.
+static f32 advanceMorf(f32& cur, bool& active) {
+    if (!active) return 1.0f;
+    const f32 prev = cur;
+    cur += kMorphStep;
+    if (cur >= 1.0f) { cur = 1.0f; active = false; }
+    const f32 denom = 1.0f - prev;
+    if (denom <= 0.0001f) return 1.0f;
+    f32 f = (cur - prev) / denom;
+    if (f < 0.0f) f = 0.0f; else if (f > 1.0f) f = 1.0f;
+    return f;
+}
+
 // Per-joint region animation: Link's body is a blend of a lower-body (legs/
 // locomotion) anim and an upper-body (arms/torso) anim. The stock blend table is
 // a GLOBAL weighted lerp (would mash legs+arms together), so we drive the
 // skeleton ourselves: upper-body joints (~ spine 2 .. end of arms 0x11; arms are
 // chains 7-9 and 0xC-0xE, head is 4) take the upper anim; root/waist/legs take
 // the under anim. Each frame the caller sets `under`/`upper` (already frame-
-// advanced); a throwaway instance is set as the body's MtxCalc for one calc().
+// advanced) plus the per-layer morf factors and the puppet's persistent `pose`
+// cache; a throwaway instance is set as the body's MtxCalc for one calc().
+//
+// Crossfade: each joint eases its stored pose toward the live target by its
+// layer's factor (1 = snap). Rotation is shortest-arc per-axis s16 (the s16 wrap
+// of the delta picks the short way round); scale/translate are linear. The
+// blended pose is fed through the SAME J3DMtxCalcCalcTransformMaya::calcTransform
+// the non-morph path uses, so all the parent-stack / scale-compensate handling is
+// identical — we never re-implement the engine's fragile setJ3DData.
 struct PuppetBodyMtxCalc
     : public J3DMtxCalcNoAnm<J3DMtxCalcCalcTransformMaya, J3DMtxCalcJ3DSysInitMaya> {
-    J3DAnmTransform* under = nullptr;
-    J3DAnmTransform* upper = nullptr;
+    J3DAnmTransform*  under = nullptr;
+    J3DAnmTransform*  upper = nullptr;
+    J3DTransformInfo* pose  = nullptr;   // -> puppet mPose[kMaxJoints]
+    f32               underFactor = 1.0f;
+    f32               upperFactor = 1.0f;
     virtual ~PuppetBodyMtxCalc() {}
     virtual void calc() {
         const u16 jntNo = getJoint()->getJntNo();
         j3dSys.setCurrentMtxCalc(this);
         // Spine/head/arms (joints 2..0x11) follow the upper (arms) anim; root/
         // waist/legs follow the under (locomotion) anim.
-        J3DAnmTransform* a = (jntNo >= 2 && jntNo <= 0x11 && upper != nullptr) ? upper : under;
+        const bool upperRegion = (jntNo >= 2 && jntNo <= 0x11);
+        J3DAnmTransform* a = (upperRegion && upper != nullptr) ? upper : under;
         if (a == nullptr) a = (under != nullptr) ? under : upper;
         if (a == nullptr) return;
-        J3DTransformInfo info;
-        a->getTransform(jntNo, &info);
-        J3DMtxCalcCalcTransformMaya::calcTransform(info);
+        J3DTransformInfo target;
+        a->getTransform(jntNo, &target);
+
+        const f32 f = upperRegion ? upperFactor : underFactor;
+        // Snap (and seed the pose cache) when not crossfading, or when this joint
+        // is beyond the cache (defensive: Link's body fits, but never index OOB).
+        if (pose == nullptr || jntNo >= daDuskPuppet_c::kMaxJoints || f >= 1.0f) {
+            if (pose != nullptr && jntNo < daDuskPuppet_c::kMaxJoints) pose[jntNo] = target;
+            J3DMtxCalcCalcTransformMaya::calcTransform(target);
+            return;
+        }
+        // Ease the stored pose a fraction `f` toward the live target this frame.
+        J3DTransformInfo& p = pose[jntNo];
+        p.mScale.x     += (target.mScale.x     - p.mScale.x)     * f;
+        p.mScale.y     += (target.mScale.y     - p.mScale.y)     * f;
+        p.mScale.z     += (target.mScale.z     - p.mScale.z)     * f;
+        p.mTranslate.x += (target.mTranslate.x - p.mTranslate.x) * f;
+        p.mTranslate.y += (target.mTranslate.y - p.mTranslate.y) * f;
+        p.mTranslate.z += (target.mTranslate.z - p.mTranslate.z) * f;
+        const s16 dx = (s16)(target.mRotation.x - p.mRotation.x);  // s16 wrap = short arc
+        const s16 dy = (s16)(target.mRotation.y - p.mRotation.y);
+        const s16 dz = (s16)(target.mRotation.z - p.mRotation.z);
+        p.mRotation.x = (s16)(p.mRotation.x + (s16)(dx * f));
+        p.mRotation.y = (s16)(p.mRotation.y + (s16)(dy * f));
+        p.mRotation.z = (s16)(p.mRotation.z + (s16)(dz * f));
+        J3DMtxCalcCalcTransformMaya::calcTransform(p);
     }
 };
 }  // namespace
@@ -359,9 +418,9 @@ int daDuskPuppet_c::create() {
     mCurUpperId = kAnimNone;
     mUnderFrame = 0.0f;
     mUpperFrame = 0.0f;
-    mUnderPrev = mUpperPrev = NULL;
-    mUnderPrevFrame = mUpperPrevFrame = 0.0f;
-    mUnderMorph = mUpperMorph = 1.0f;
+    mMorphReady = false;            // first calc seeds mPose; no crossfade until then
+    mUnderMorf = mUpperMorf = 1.0f; // settled
+    mUnderMorfing = mUpperMorfing = false;
     scale.set(1.0f, 1.0f, 1.0f);
 
     // The costume's body model must already be loaded (the manager only spawns
@@ -405,20 +464,38 @@ int daDuskPuppet_c::Execute() {
         // looks jerky even at 0 ping. Exponential interpolation per frame; but if
         // the target jumped far (warp / room change) snap so we don't slide across
         // the map.
-        const f32 dx = p->posX - current.pos.x;
-        const f32 dy = p->posY - current.pos.y;
-        const f32 dz = p->posZ - current.pos.z;
-        const f32 dist2 = dx * dx + dy * dy + dz * dz;
-        const f32 kSnapDist2 = 300.0f * 300.0f;  // > ~3 m: treat as a teleport
-        if (dist2 > kSnapDist2) {
-            current.pos.set(p->posX, p->posY, p->posZ);
-            shape_angle.y = p->angleY;
+        // While mounted, RIGIDLY attach the rider to the shared horse's seat instead
+        // of chasing its network-smoothed Link pos — otherwise it lags and "flies
+        // off" at speed. The horse itself is already position-synced (slaved), so we
+        // just snap to its seat each frame and let the synced ride anim play. Seats
+        // reuse the engine's Link+Zelda offsets: driver = front, passengers stack at
+        // the rear. Origin at the horse GROUND Y so the ride anim lifts onto the seat.
+        const bool onHorse = (p->flags & dusk::net::kFlagOnHorse) != 0;
+        daHorse_c* horse = onHorse ? dComIfGp_getHorseActor() : NULL;
+        if (horse != NULL) {
+            static const Vec kFrontSeat = {-75.894f, 57.61f, 4.079f};  // driver
+            static const Vec kRearSeat  = {-5.894f, 52.61f, 4.079f};   // passenger(s)
+            cXyz seat;
+            mDoMtx_multVec(horse->getRootMtx(),
+                           dusk::net::isHorseDriver(p->id) ? &kFrontSeat : &kRearSeat, &seat);
+            current.pos.set(seat.x, horse->current.pos.y, seat.z);
+            shape_angle.y = horse->shape_angle.y;
         } else {
-            const f32 k = 0.35f;  // smoothing factor (0..1); higher = snappier
-            current.pos.x += dx * k;
-            current.pos.y += dy * k;
-            current.pos.z += dz * k;
-            shape_angle.y += (s16)((s16)(p->angleY - shape_angle.y) * k);  // shortest-arc
+            const f32 dx = p->posX - current.pos.x;
+            const f32 dy = p->posY - current.pos.y;
+            const f32 dz = p->posZ - current.pos.z;
+            const f32 dist2 = dx * dx + dy * dy + dz * dz;
+            const f32 kSnapDist2 = 300.0f * 300.0f;  // > ~3 m: treat as a teleport
+            if (dist2 > kSnapDist2) {
+                current.pos.set(p->posX, p->posY, p->posZ);
+                shape_angle.y = p->angleY;
+            } else {
+                const f32 k = 0.35f;  // smoothing factor (0..1); higher = snappier
+                current.pos.x += dx * k;
+                current.pos.y += dy * k;
+                current.pos.z += dz * k;
+                shape_angle.y += (s16)((s16)(p->angleY - shape_angle.y) * k);  // shortest-arc
+            }
         }
     }
     setBaseMtx();
@@ -437,11 +514,22 @@ int daDuskPuppet_c::Execute() {
         wantUnder = (u16)dRes_ID_ALANM_BCK_WAITS_e;
         under = getAnimById(wantUnder);
     }
-    if (wantUnder != mCurAnimId) { mUnderFrame = 0.0f; mCurAnimId = wantUnder; }
+    if (wantUnder != mCurAnimId) {
+        mUnderFrame = 0.0f;
+        mCurAnimId = wantUnder;
+        // Start a lower-layer crossfade from the pose we're currently holding
+        // (mPose already has the old anim's pose) toward the new anim. Skip on the
+        // very first switch (pose cache not yet seeded -> would blend from garbage).
+        if (mMorphReady) { mUnderMorf = 0.0f; mUnderMorfing = true; }
+    }
 
     const u16 wantUpper = (p != NULL) ? p->animUpper : kAnimNone;
     J3DAnmTransform* upper = getAnimById(wantUpper);  // NULL when none/idle
-    if (wantUpper != mCurUpperId) { mUpperFrame = 0.0f; mCurUpperId = wantUpper; }
+    if (wantUpper != mCurUpperId) {
+        mUpperFrame = 0.0f;
+        mCurUpperId = wantUpper;
+        if (mMorphReady) { mUpperMorf = 0.0f; mUpperMorfing = true; }
+    }
 
     if (under != NULL) {
         mUnderFrame += 1.0f;
@@ -458,12 +546,21 @@ int daDuskPuppet_c::Execute() {
     }
 
     if (mAnimStarted && under != NULL) {
+        // Advance each layer's crossfade once per frame (the MtxCalc::calc below
+        // runs per joint, so factors must be computed here). Returns 1.0 = snap.
+        const f32 underFactor = advanceMorf(mUnderMorf, mUnderMorfing);
+        const f32 upperFactor = advanceMorf(mUpperMorf, mUpperMorfing);
+
         PuppetBodyMtxCalc mc;  // throwaway: valid for this calc() only
         mc.under = under;
         mc.upper = upper;
+        mc.pose  = mPose;
+        mc.underFactor = underFactor;
+        mc.upperFactor = upperFactor;
         J3DModel* bm = mpBody->getModel();
         bm->getModelData()->getJointNodePointer(0)->setMtxCalc(&mc);
         bm->calc();
+        mMorphReady = true;  // mPose is now seeded -> subsequent switches crossfade
     }
 
     // Attach head + hands to the body's joints (mirrors daAlink_c draw):

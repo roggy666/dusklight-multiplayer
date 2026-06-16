@@ -86,9 +86,17 @@ State msg (C->S) tail after type byte, all little-endian:
    if jump >3 m); relay runs at `--tick 60`.
 
 ## OPEN / NOT done
-- **Co-op cutscene sync (UNSOLVED).** Goal: when player A triggers a cutscene,
-  player B also plays it (with B's local Link), + teleport other players to the
-  activator's position. Findings so far: the event NAME is correctly synced
+- **Teleport-to-activator (DONE, first step).** When a remote peer starts a
+  cutscene (rising edge of `kFlagInCutscene`), `net.cpp processCutsceneTeleport()`
+  (called from `onGameFrame` after the send) warps the LOCAL Link to that peer's
+  reported pos/angle via `daAlink_c::setPlayerPosAndAngle(&pos, angleY, TRUE)`.
+  Gated: same scene (`sceneHash`), and skipped if the local player is themselves
+  in a demo/event (don't fight the local camera). Reuses existing protocol fields
+  — no wire/relay change. Edge state: `prevInCutscene[256]` indexed by net id.
+  Still TODO below: actually PLAY the same cutscene on the receiver.
+- **Co-op cutscene sync (play on receiver, UNSOLVED).** Goal: when player A
+  triggers a cutscene, player B also plays it (with B's local Link). Findings so
+  far: the event NAME is correctly synced
   (`getRunEventName()` → e.g. `demo01_04`, `demo38_01`; also returns
   `"NO DATA"`/`"DEFAULT_START"` when not a real event). `startCheck(name)` only
   *reports* whether an event is already running. `order(getEventIdx(name,0xFF))`

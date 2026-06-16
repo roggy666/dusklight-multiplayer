@@ -55,6 +55,7 @@
 #include "dusk/action_bindings.h"
 #include "dusk/frame_interpolation.h"
 #include "dusk/settings.h"
+#include "dusk/net.h"  // dusk::net::hasRemoteHorseOwner (co-op passenger rear seat)
 #include "res/Object/Alink.h"
 #include <cstring>
 #include <dusk/string.hpp>
